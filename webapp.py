@@ -17,7 +17,8 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.utils.executor import start_webhook # Використовуємо start_webhook для запуску бота
+# from aiogram.utils.executor import start_webhook # Використовуємо start_webhook для запуску бота
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_webhook
 
 from dotenv import load_dotenv
 
@@ -150,6 +151,60 @@ dp = Dispatcher(storage=storage)
 
 MONOBANK_CARD_NUMBER = os.getenv("MONOBANK_CARD_NUMBER", "XXXX XXXX XXXX XXXX")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "your_bot_username") # Для посилання-запрошення
+
+# ==== STATES (Стани для FSM) ====
+class AddSourceStates(StatesGroup):
+    """Стани для додавання нового джерела."""
+    waiting_for_source_name = State()
+    waiting_for_source_link = State()
+    waiting_for_source_type = State()
+
+class AddNewsStates(StatesGroup): # Для адмінів/контент-мейкерів
+    """Стани для додавання нової новини вручну."""
+    waiting_for_title = State()
+    waiting_for_content = State()
+    waiting_for_lang = State()
+    waiting_for_country = State()
+    waiting_for_tags = State()
+    waiting_for_source_name = State()
+    waiting_for_link = State()
+    waiting_for_media = State() # Photo/file_id
+
+class SearchNewsStates(StatesGroup):
+    """Стан для пошуку новин."""
+    waiting_for_search_query = State()
+
+class ReportNewsStates(StatesGroup):
+    """Стан для відправки скарг."""
+    waiting_for_report_reason = State()
+    waiting_for_news_id_for_report = State()
+
+class FeedbackStates(StatesGroup):
+    """Стан для відправки відгуків."""
+    waiting_for_feedback_message = State()
+
+class FilterStates(StatesGroup):
+    """Стани для налаштування фільтрів."""
+    waiting_for_filter_tag = State()
+    waiting_for_filter_category = State()
+    waiting_for_filter_source = State()
+    waiting_for_filter_language = State()
+    waiting_for_filter_country = State()
+    waiting_for_filter_content_type = State()
+
+class CustomFeedStates(StatesGroup):
+    """Стани для управління персональними добірками."""
+    waiting_for_feed_name = State()
+    waiting_for_feed_filters_tags = State()
+    waiting_for_feed_filters_sources = State()
+    waiting_for_feed_filters_languages = State()
+
+class ProfileSettingsStates(StatesGroup):
+    """Стани для налаштувань профілю користувача."""
+    waiting_for_language_change = State()
+    waiting_for_country_change = State()
+    waiting_for_email = State()
+    waiting_for_view_mode = State()
 
 # Функція для екранування тексту для MarkdownV2
 def escape_markdown_v2(text: str) -> str:
@@ -881,29 +936,6 @@ async def accept_invite_api(req: InviteAcceptRequest):
         await conn.close()
 
 
-# Функція для запуску бота через webhook
-async def on_startup_webhook(dispatcher: Dispatcher, webhook_url: str):
-    await bot.set_webhook(webhook_url)
-    logging.info(f"Webhook встановлено на: {webhook_url}")
-    # Реєструємо хендлери під час старту програми
-    register_telegram_handlers(dispatcher)
-    # Запускаємо фонову задачу для автоматичних сповіщень
-    asyncio.create_task(send_auto_notifications_task())
-
-async def on_shutdown_webhook(dispatcher: Dispatcher):
-    logging.warning('Завершення роботи...')
-    await bot.delete_webhook()
-    await dispatcher.storage.close()
-    await bot.session.close()
-    logging.warning('Завершено.')
-
-# ==== Telegram Bot Webhook Endpoint ====
-@app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    update = types.Update.parse_obj(await request.json())
-    await dp.feed_update(bot, update)
-    return {"ok": True}
-
 # ==== Автоматичні сповіщення ====
 async def send_auto_notifications_task():
     """
@@ -1057,7 +1089,7 @@ async def start_command_handler(msg: types.Message, state: FSMContext):
             await msg.answer("👋 Ласкаво просимо до AI News Бота!", reply_markup=main_keyboard)
         else:
             await msg.answer("👋 Ласкаво просимо! Виникла проблема з реєстрацією, але ви можете продовжувати користуватися.")
-    await state.clear() # Очищаємо стан, якщо був
+    await state.set_state(None) # Очищаємо стан, якщо був
 
 
 async def show_news_handler(msg: types.Message):
@@ -1149,7 +1181,7 @@ async def process_news_interaction_handler(callback_query: types.CallbackQuery):
 async def show_filters_menu_handler(msg: types.Message, state: FSMContext):
     """Відкриває меню фільтрів."""
     await msg.answer("Оберіть дію з фільтрами:", reply_markup=filters_keyboard)
-    await state.clear() # Очищаємо стан, якщо був
+    await state.set_state(None) # Очищаємо стан, якщо був
 
 async def add_filter_start_handler(msg: types.Message):
     """Починає процес додавання нового фільтра."""
@@ -1192,7 +1224,7 @@ async def process_filter_value_handler(msg: types.Message, state: FSMContext):
             await msg.answer(f"✅ Фільтр '`{escape_markdown_v2(filter_type)}`: `{escape_markdown_v2(str(filter_value))}`' успішно додано/оновлено\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося додати/оновити фільтр. Спробуйте ще раз.")
-    await state.clear()
+    await state.set_state(None)
 
 
 async def show_my_filters_handler(msg: types.Message):
@@ -1294,7 +1326,7 @@ async def finish_create_feed_handler(callback_query: types.CallbackQuery, state:
         else:
             error_details = await resp.json()
             await callback_query.message.answer(f"❌ Не вдалося створити добірку: {escape_markdown_v2(error_details.get('detail', 'Невідома помилка'))}")
-    await state.clear()
+    await state.set_state(None)
     await callback_query.message.delete_reply_markup()
 
 
@@ -1315,7 +1347,7 @@ async def switch_custom_feed_menu_handler(msg: types.Message, state: FSMContext)
                 await msg.answer("У вас ще немає створених добірок. Створіть одну за допомогою '🆕 Створити добірку'.")
         else:
             await msg.answer("❌ Не вдалося завантажити ваші добірки.")
-    await state.clear()
+    await state.set_state(None)
 
 
 async def process_switch_feed_handler(callback_query: types.CallbackQuery, state: FSMContext):
@@ -1334,7 +1366,7 @@ async def process_switch_feed_handler(callback_query: types.CallbackQuery, state
         else:
             await callback_query.message.answer("❌ Не вдалося переключити добірку. Спробуйте пізніше.")
     await callback_query.message.edit_reply_markup(reply_markup=None) # Remove inline keyboard after selection
-    await state.clear()
+    await state.set_state(None)
 
 
 async def edit_custom_feed_menu_handler(msg: types.Message, state: FSMContext):
@@ -1354,13 +1386,13 @@ async def edit_custom_feed_menu_handler(msg: types.Message, state: FSMContext):
                 await msg.answer("У вас ще немає створених добірок для редагування.")
         else:
             await msg.answer("❌ Не вдалося завантажити ваші добірки.")
-    await state.clear()
+    await state.set_state(None)
 
 
 async def show_settings_handler(msg: types.Message, state: FSMContext):
     """Відкриває меню налаштувань."""
     await msg.answer("Оберіть налаштування:", reply_markup=settings_keyboard)
-    await state.clear()
+    await state.set_state(None)
 
 async def toggle_safe_mode_handler(msg: types.Message):
     """Перемикає безпечний режим для користувача."""
@@ -1441,7 +1473,7 @@ async def email_subscription_menu_handler(msg: types.Message, state: FSMContext)
                 await msg.answer("У вас ще не налаштована Email\\-розсилка\\. Додайте вашу Email\\-адресу:", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося завантажити профіль користувача.")
-    await state.clear()
+    await state.set_state(None)
 
 async def request_email_input_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Запитує Email адресу у користувача."""
@@ -1464,7 +1496,7 @@ async def process_email_input_handler(msg: types.Message, state: FSMContext):
             await msg.answer(f"✅ Вашу Email\\-адресу `{escape_markdown_v2(email)}` успішно збережено для розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося зберегти Email\\. Можливо, ця адреса вже використовується\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def unsubscribe_email_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Відписує користувача від email-розсилок."""
@@ -1477,7 +1509,7 @@ async def unsubscribe_email_callback(callback_query: types.CallbackQuery, state:
             await callback_query.message.answer("✅ Ви успішно відписалися від Email\\-розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await callback_query.message.answer("❌ Не вдалося відписатися від Email\\-розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def toggle_auto_notifications_handler(msg: types.Message):
     """Перемикає автоматичні сповіщення про нові новини."""
@@ -1517,7 +1549,7 @@ async def set_view_mode_handler(msg: types.Message, state: FSMContext):
             await msg.answer(f"Ваш поточний режим перегляду: *{escape_markdown_v2(current_view_mode)}*\\.\nОберіть новий режим:", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося завантажити профіль користувача\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def process_view_mode_selection_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Обробляє вибір режиму перегляду новин."""
@@ -1532,7 +1564,7 @@ async def process_view_mode_selection_callback(callback_query: types.CallbackQue
         else:
             await callback_query.message.answer("❌ Не вдалося змінити режим перегляду\\.", parse_mode=ParseMode.MARKDOWN_V2)
     await callback_query.message.edit_reply_markup(reply_markup=None)
-    await state.clear()
+    await state.set_state(None)
 
 async def daily_digest_menu_handler(msg: types.Message, state: FSMContext):
     """Відкриває меню управління щоденною розсилкою."""
@@ -1543,7 +1575,7 @@ async def daily_digest_menu_handler(msg: types.Message, state: FSMContext):
         types.InlineKeyboardButton(text="Відписатись", callback_data="unsubscribe_daily")
     )
     await msg.answer("Оберіть частоту розсилки новин:", reply_markup=keyboard)
-    await state.clear()
+    await state.set_state(None)
 
 async def process_subscribe_daily_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Обробляє підписку на дайджест з різною частотою."""
@@ -1558,7 +1590,7 @@ async def process_subscribe_daily_callback(callback_query: types.CallbackQuery, 
         else:
             await callback_query.message.answer("❌ Не вдалося оформити підписку\\.", parse_mode=ParseMode.MARKDOWN_V2)
     await callback_query.message.edit_reply_markup(reply_markup=None)
-    await state.clear()
+    await state.set_state(None)
 
 async def process_unsubscribe_daily_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Обробляє відписку від щоденної розсилки."""
@@ -1572,7 +1604,7 @@ async def process_unsubscribe_daily_callback(callback_query: types.CallbackQuery
         else:
             await callback_query.message.answer("❌ Не вдалося відписатися\\.", parse_mode=ParseMode.MARKDOWN_V2)
     await callback_query.message.edit_reply_markup(reply_markup=None)
-    await state.clear()
+    await state.set_state(None)
 
 async def show_analytics_handler(msg: types.Message, state: FSMContext):
     """Показує статистику використання бота для користувача."""
@@ -1614,7 +1646,7 @@ async def show_analytics_handler(msg: types.Message, state: FSMContext):
                 await msg.answer("Поки що немає даних для аналітики.")
         else:
             await msg.answer("❌ Не вдалося завантажити аналітику.")
-    await state.clear()
+    await state.set_state(None)
 
 async def start_report_process_handler(msg: types.Message, state: FSMContext):
     """Починає процес подачі скарги."""
@@ -1624,7 +1656,7 @@ async def start_report_process_handler(msg: types.Message, state: FSMContext):
         types.InlineKeyboardButton(text="Загальна проблема", callback_data="report_general")
     )
     await msg.answer("На що ви бажаєте подати скаргу?", reply_markup=keyboard)
-    await state.clear()
+    await state.set_state(None)
 
 async def process_report_type_handler(callback_query: types.CallbackQuery, state: FSMContext):
     """Обробляє тип скарги та запитує додаткову інформацію."""
@@ -1671,7 +1703,7 @@ async def process_report_reason_handler(msg: types.Message, state: FSMContext):
             await msg.answer("✅ Вашу скаргу отримано\\. Дякуємо за допомогу\\!", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося відправити скаргу\\. Спробуйте пізніше\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def start_feedback_process_handler(msg: types.Message, state: FSMContext):
     """Починає процес залишення відгуку."""
@@ -1692,7 +1724,7 @@ async def process_feedback_message_handler(msg: types.Message, state: FSMContext
             await msg.answer("✅ Дякуємо за ваш відгук\\!", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося відправити відгук\\. Спробуйте пізніше\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def language_translate_handler(msg: types.Message, state: FSMContext):
     """Меню для вибору мови інтерфейсу та налаштування перекладу новин."""
@@ -1702,7 +1734,7 @@ async def language_translate_handler(msg: types.Message, state: FSMContext):
         types.InlineKeyboardButton(text="Увімкнути/вимкнути переклад новин", callback_data="toggle_news_translation")
     )
     await msg.answer("🌍 Оберіть опцію мови:", reply_markup=keyboard)
-    await state.clear()
+    await state.set_state(None)
 
 async def request_interface_lang_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Запитує нову мову інтерфейсу у користувача."""
@@ -1721,24 +1753,24 @@ async def process_interface_lang_change_handler(msg: types.Message, state: FSMCo
             await msg.answer(f"✅ Мову інтерфейсу успішно змінено на `{escape_markdown_v2(new_lang)}`\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося змінити мову інтерфейсу\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def toggle_news_translation_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Перемикає функцію автоматичного перекладу новин."""
     await callback_query.bot.answer_callback_query(callback_query.id)
     await callback_query.message.answer("Функція автоматичного перекладу новин перемкнена (моковано)\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 
 async def ai_features_handler(msg: types.Message, state: FSMContext):
     """Відкриває меню функцій AI-аналізу."""
     await msg.answer("🤖 Доступні функції AI-аналізу:", reply_markup=ai_analysis_keyboard)
-    await state.clear()
+    await state.set_state(None)
 
 async def summary_start_handler(msg: types.Message, state: FSMContext):
     """Запитує ID новини для генерації AI-резюме."""
     await msg.answer("🧠 Вкажіть ID новини для резюме: `/summary ID_НОВИНИ`", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear() # Clear state in case it was stuck
+    await state.set_state(None) # Clear state in case it was stuck
 
 async def summary_command_handler(msg: types.Message, state: FSMContext):
     """Генерує AI-резюме для вказаної новини."""
@@ -1753,7 +1785,7 @@ async def summary_command_handler(msg: types.Message, state: FSMContext):
             text_to_summarize = args
     else:
         await msg.answer("🧠 Будь ласка, вкажіть ID новини (наприклад, `/summary 123`) або надайте текст для резюме (наприклад, `/summary Ваш текст тут`)", parse_mode=ParseMode.MARKDOWN_V2)
-        await state.clear()
+        await state.set_state(None)
         return
 
     async with aiohttp.ClientSession() as session:
@@ -1768,7 +1800,7 @@ async def summary_command_handler(msg: types.Message, state: FSMContext):
             await msg.answer(f"🧠 *Резюме:*\n`{summary_text}`", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося згенерувати резюме. Спробуйте ще раз.")
-    await state.clear()
+    await state.set_state(None)
 
 async def recommend_handler(msg: types.Message, state: FSMContext):
     """Показує AI-рекомендації новин."""
@@ -1789,19 +1821,19 @@ async def recommend_handler(msg: types.Message, state: FSMContext):
                 await msg.answer("Наразі немає рекомендацій. Продовжуйте читати, щоб AI зміг краще вас зрозуміти!")
         else:
             await msg.answer("❌ Не вдалося отримати рекомендації.")
-    await state.clear()
+    await state.set_state(None)
 
 async def fact_check_start_handler(msg: types.Message, state: FSMContext):
     """Запитує ID новини для фактчекінгу."""
     await msg.answer("🔍 Вкажіть ID новини для фактчекінгу: `/verify ID_НОВИНИ`", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def verify_command_handler(msg: types.Message, state: FSMContext):
     """Виконує фактчекінг для вказаної новини."""
     args = msg.get_args()
     if not args or not args.isdigit():
         await msg.answer("🔍 Будь ласка, вкажіть коректний ID новини: `/verify 123`", parse_mode=ParseMode.MARKDOWN_V2)
-        await state.clear()
+        await state.set_state(None)
         return
     news_id = int(args)
 
@@ -1819,12 +1851,12 @@ async def verify_command_handler(msg: types.Message, state: FSMContext):
                              parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося провести фактчекінг для цієї новини.")
-    await state.clear()
+    await state.set_state(None)
 
 async def rewrite_headline_start_handler(msg: types.Message, state: FSMContext):
     """Запитує заголовок для переписування."""
     await msg.answer("✍️ Будь ласка, надішліть заголовок, який ви хочете переписати:")
-    await state.set_state('waiting_for_headline_to_rewrite')
+    await state.set_state(AddNewsStates.waiting_for_title) # Using AddNewsStates.waiting_for_title for general text input
 
 async def process_headline_rewrite_handler(msg: types.Message, state: FSMContext):
     """Переписує заголовок за допомогою AI."""
@@ -1840,7 +1872,7 @@ async def process_headline_rewrite_handler(msg: types.Message, state: FSMContext
                              parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося переписати заголовок.")
-    await state.clear()
+    await state.set_state(None)
 
 # == Додаткові функції (не в меню AI-аналізу) ==
 
@@ -1913,7 +1945,7 @@ async def process_news_media_handler(msg: types.Message, state: FSMContext):
             await msg.answer("✅ Новина успішно додана та відправлена на обробку AI\\!", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося додати новину\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def add_source_start_handler(msg: types.Message, state: FSMContext):
     """Починає процес додавання нового джерела."""
@@ -1952,20 +1984,20 @@ async def process_source_type_callback(callback_query: types.CallbackQuery, stat
             await callback_query.message.answer("✅ Джерело успішно додано! Воно буде перевірено адміністрацією\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await callback_query.message.answer("❌ Не вдалося додати джерело\\. Можливо, воно вже існує або виникла помилка\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
     await callback_query.message.edit_reply_markup(reply_markup=None)
 
 async def rate_news_start_handler(msg: types.Message, state: FSMContext):
     """Просить користувача ввести ID новини для оцінки."""
     await msg.answer("Будь ласка, вкажіть ID новини, яку ви хочете оцінити: `/rate ID_НОВИНИ ОЦІНКА` (від 1 до 5)", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def rate_news_command_handler(msg: types.Message, state: FSMContext):
     """Обробляє команду оцінки новини."""
     args = msg.get_args().split()
     if len(args) != 2 or not args[0].isdigit() or not args[1].isdigit():
         await msg.answer("Будь ласка, вкажіть ID новини та оцінку (від 1 до 5): `/rate ID_НОВИНИ ОЦІНКА`", parse_mode=ParseMode.MARKDOWN_V2)
-        await state.clear()
+        await state.set_state(None)
         return
 
     news_id = int(args[0])
@@ -1974,7 +2006,7 @@ async def rate_news_command_handler(msg: types.Message, state: FSMContext):
 
     if not (1 <= rating_value <= 5):
         await msg.answer("Оцінка повинна бути числом від 1 до 5\\.", parse_mode=ParseMode.MARKDOWN_V2)
-        await state.clear()
+        await state.set_state(None)
         return
 
     async with aiohttp.ClientSession() as session:
@@ -1987,7 +2019,7 @@ async def rate_news_command_handler(msg: types.Message, state: FSMContext):
             await msg.answer(f"✅ Новина ID `{escape_markdown_v2(str(news_id))}` оцінена на `{escape_markdown_v2(str(rating_value))}`\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося оцінити новину\\. Можливо, ви вже оцінювали її або сталася помилка\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def show_bookmarks_handler(msg: types.Message, state: FSMContext):
     """Показує список новин, збережених у закладках користувача."""
@@ -2007,7 +2039,7 @@ async def show_bookmarks_handler(msg: types.Message, state: FSMContext):
                 await msg.answer("У вас немає збережених новин у закладках\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося завантажити закладки\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def comments_menu_handler(msg: types.Message, state: FSMContext):
     """Меню для управління коментарями."""
@@ -2015,12 +2047,12 @@ async def comments_menu_handler(msg: types.Message, state: FSMContext):
         types.InlineKeyboardButton(text="Додати коментар", callback_data="add_comment"),
         types.InlineKeyboardButton(text="Переглянути коментарі до новини", callback_data="view_comments")
     ))
-    await state.clear()
+    await state.set_state(None)
 
 async def start_add_comment_callback(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.bot.answer_callback_query(callback_query.id)
     await callback_query.message.answer("Вкажіть *ID новини*, до якої ви хочете додати коментар:", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.set_state('waiting_for_comment_news_id')
+    await state.set_state(CommentStates.waiting_for_news_id) # Set state here
 
 async def process_comment_news_id_handler(msg: types.Message, state: FSMContext):
     if not msg.text.isdigit():
@@ -2028,7 +2060,7 @@ async def process_comment_news_id_handler(msg: types.Message, state: FSMContext)
         return
     await state.update_data(news_id=int(msg.text))
     await msg.answer("Напишіть ваш *коментар*:", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.set_state('waiting_for_comment_content')
+    await state.set_state(CommentStates.waiting_for_content) # Set state here
 
 async def process_comment_content_handler(msg: types.Message, state: FSMContext):
     comment_content = msg.text
@@ -2046,12 +2078,12 @@ async def process_comment_content_handler(msg: types.Message, state: FSMContext)
             await msg.answer("✅ Ваш коментар успішно додано і очікує модерації\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося додати коментар\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def start_view_comments_callback(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.bot.answer_callback_query(callback_query.id)
     await callback_query.message.answer("Вкажіть *ID новини*, коментарі до якої ви хочете переглянути:", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.set_state('waiting_for_view_comments_news_id')
+    await state.set_state(CommentStates.waiting_for_view_news_id) # Set state here
 
 async def process_view_comments_news_id_handler(msg: types.Message, state: FSMContext):
     if not msg.text.isdigit():
@@ -2074,7 +2106,7 @@ async def process_view_comments_news_id_handler(msg: types.Message, state: FSMCo
                 await msg.answer("До цієї новини ще немає коментарів або вони очікують модерації\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося завантажити коментарі\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def show_trending_news_handler(msg: types.Message, state: FSMContext):
     """Показує трендові новини."""
@@ -2092,7 +2124,7 @@ async def show_trending_news_handler(msg: types.Message, state: FSMContext):
                 await msg.answer("Наразі немає трендових новин\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося завантажити трендові новини\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def invite_friend_handler(msg: types.Message, state: FSMContext):
     """Генерує унікальне посилання-запрошення для реферальної системи."""
@@ -2107,12 +2139,12 @@ async def invite_friend_handler(msg: types.Message, state: FSMContext):
                              "Коли ваш друг приєднається за цим посиланням, ви отримаєте бонус!", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося згенерувати запрошення\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear()
+    await state.set_state(None)
 
 async def back_to_main_menu_handler(msg: types.Message, state: FSMContext):
     """Повернення до головного меню."""
     await msg.answer("Ви повернулись до головного меню\\.", reply_markup=main_keyboard, parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear() # Завжди очищаємо стан при поверненні в головне меню
+    await state.set_state(None) # Завжди очищаємо стан при поверненні в головне меню
 
 async def unknown_message_handler(msg: types.Message, state: FSMContext):
     """Обробляє всі невідомі текстові повідомлення."""
@@ -2123,7 +2155,13 @@ async def unknown_message_handler(msg: types.Message, state: FSMContext):
         return # Не очищаємо стан і не відповідаємо, очікуючи коректного вводу для поточного стану
 
     await msg.answer("🤔 Вибачте, я не розумію вашу команду\\. Будь ласка, скористайтесь меню або командою `/start`\\.", reply_markup=main_keyboard, parse_mode=ParseMode.MARKDOWN_V2)
-    await state.clear() # Очищаємо стан на всяк випадок, якщо це було випадкове повідомлення
+    await state.set_state(None) # Очищаємо стан на всяк випадок, якщо це було випадкове повідомлення
+
+# Custom state group for comments
+class CommentStates(StatesGroup):
+    waiting_for_news_id = State()
+    waiting_for_content = State()
+    waiting_for_view_news_id = State()
 
 # == ФУНКЦІЯ РЕЄСТРАЦІЇ ХЕНДЛЕРІВ ==
 def register_telegram_handlers(dp: Dispatcher):
@@ -2154,4 +2192,120 @@ def register_telegram_handlers(dp: Dispatcher):
     dp.message.register(summary_start_handler, lambda m: m.text == "🧠 AI Summary")
     dp.message.register(recommend_handler, lambda m: m.text == "💡 Рекомендації")
     dp.message.register(fact_check_start_handler, lambda m: m.text == "🔍 Фактчекінг")
-    dp.message.regis
+    dp.message.register(rewrite_headline_start_handler, lambda m: m.text == "✍️ Переписати заголовок")
+
+    # Обробники кнопок налаштувань
+    dp.message.register(toggle_safe_mode_handler, lambda m: m.text == "🔒 Безпечний режим")
+    dp.message.register(premium_info_handler, lambda m: m.text == "✨ Преміум")
+    dp.message.register(email_subscription_menu_handler, lambda m: m.text == "📧 Email розсилка")
+    dp.message.register(toggle_auto_notifications_handler, lambda m: m.text == "🔔 Авто-сповіщення")
+    dp.message.register(set_view_mode_handler, lambda m: m.text == "👁️ Режим перегляду")
+
+    # Обробники кнопок фільтрів
+    dp.message.register(add_filter_start_handler, lambda m: m.text == "➕ Додати фільтр")
+    dp.message.register(show_my_filters_handler, lambda m: m.text == "📝 Мої фільтри")
+    dp.message.register(reset_filters_handler, lambda m: m.text == "🗑️ Скинути фільтри")
+    dp.message.register(create_custom_feed_start_handler, lambda m: m.text == "🆕 Створити добірку")
+    dp.message.register(switch_custom_feed_menu_handler, lambda m: m.text == "🔄 Переключити добірку")
+    dp.message.register(edit_custom_feed_menu_handler, lambda m: m.text == "✏️ Редагувати добірку")
+
+    # Обробники додаткових функцій
+    dp.message.register(add_news_admin_start_handler, lambda m: m.text == "➕ Додати новину (Адмін)")
+    dp.message.register(add_source_start_handler, lambda m: m.text == "➕ Додати джерело")
+    dp.message.register(rate_news_start_handler, lambda m: m.text == "⭐ Оцінити новину")
+    dp.message.register(show_bookmarks_handler, lambda m: m.text == "🔖 Закладки")
+    dp.message.register(comments_menu_handler, lambda m: m.text == "💬 Коментарі")
+    dp.message.register(show_trending_news_handler, lambda m: m.text == "📊 Тренд")
+
+
+    # Callback Query handlers
+    dp.callback_query.register(process_news_interaction_handler, lambda c: c.data.startswith('like_') or c.data.startswith('dislike_') or c.data.startswith('save_') or c.data.startswith('skip_'))
+    dp.callback_query.register(process_filter_type_handler, lambda c: c.data.startswith('filter_type_'))
+    dp.callback_query.register(add_feed_filter_handler, lambda c: c.data.startswith('add_feed_filter_'))
+    dp.callback_query.register(finish_create_feed_handler, lambda c: c.data == 'finish_create_feed')
+    dp.callback_query.register(process_switch_feed_handler, lambda c: c.data.startswith("switch_feed_"))
+    dp.callback_query.register(handle_buy_premium_callback, lambda c: c.data == "buy_premium")
+    dp.callback_query.register(request_email_input_callback, lambda c: c.data == "add_email" or c.data == "change_email")
+    dp.callback_query.register(unsubscribe_email_callback, lambda c: c.data == "unsubscribe_email")
+    dp.callback_query.register(process_view_mode_selection_callback, lambda c: c.data.startswith('set_view_mode_'))
+    dp.callback_query.register(process_subscribe_daily_callback, lambda c: c.data.startswith('subscribe_daily_'))
+    dp.callback_query.register(process_unsubscribe_daily_callback, lambda c: c.data == "unsubscribe_daily")
+    dp.callback_query.register(process_report_type_handler, lambda c: c.data.startswith('report_'))
+    dp.callback_query.register(request_interface_lang_callback, lambda c: c.data == "change_interface_lang")
+    dp.callback_query.register(toggle_news_translation_callback, lambda c: c.data == "toggle_news_translation")
+    dp.callback_query.register(process_source_type_callback, lambda c: c.data.startswith('source_type_'))
+    dp.callback_query.register(start_add_comment_callback, lambda c: c.data == "add_comment")
+    dp.callback_query.register(start_view_comments_callback, lambda c: c.data == "view_comments")
+
+    # FSM handlers
+    dp.message.register(process_filter_value_handler, state=FilterStates.waiting_for_filter_tag)
+    dp.message.register(process_custom_feed_name_handler, state=CustomFeedStates.waiting_for_feed_name)
+    dp.message.register(process_feed_filter_value_handler, state=CustomFeedStates.waiting_for_feed_filters_tags)
+    dp.message.register(process_email_input_handler, state=ProfileSettingsStates.waiting_for_email)
+    dp.message.register(process_interface_lang_change_handler, state=ProfileSettingsStates.waiting_for_language_change)
+    dp.message.register(process_headline_rewrite_handler, state=AddNewsStates.waiting_for_title) # State for rewriting headline
+    dp.message.register(process_news_title_handler, state=AddNewsStates.waiting_for_title)
+    dp.message.register(process_news_content_handler, state=AddNewsStates.waiting_for_content)
+    dp.message.register(process_news_lang_handler, state=AddNewsStates.waiting_for_lang)
+    dp.message.register(process_news_country_handler, state=AddNewsStates.waiting_for_country)
+    dp.message.register(process_news_tags_handler, state=AddNewsStates.waiting_for_tags)
+    dp.message.register(process_news_source_name_handler, state=AddNewsStates.waiting_for_source_name)
+    dp.message.register(process_news_link_handler, state=AddNewsStates.waiting_for_link)
+    dp.message.register(process_news_media_handler, content_types=['photo', 'video', 'document', 'text'], state=AddNewsStates.waiting_for_media)
+    dp.message.register(process_source_name_handler, state=AddSourceStates.waiting_for_source_name)
+    dp.message.register(process_source_link_handler, state=AddSourceStates.waiting_for_source_link)
+    dp.message.register(process_news_id_for_report_handler, state=ReportNewsStates.waiting_for_news_id_for_report)
+    dp.message.register(process_report_reason_handler, state=ReportNewsStates.waiting_for_report_reason)
+    dp.message.register(process_feedback_message_handler, state=FeedbackStates.waiting_for_feedback_message)
+    dp.message.register(process_comment_news_id_handler, state=CommentStates.waiting_for_news_id)
+    dp.message.register(process_comment_content_handler, state=CommentStates.waiting_for_content)
+    dp.message.register(process_view_comments_news_id_handler, state=CommentStates.waiting_for_view_news_id)
+
+    # Обробник невідомих повідомлень має бути останнім
+    dp.message.register(unknown_message_handler)
+
+
+# Flask/FastAPI app definition
+app = FastAPI()
+
+# Функція для запуску бота через webhook
+@app.on_event("startup")
+async def on_startup():
+    logging.info("FastAPI додаток запускається...")
+    # Приклад: перевірка підключення до БД при старті
+    try:
+        conn = await get_db_connection()
+        await conn.close()
+        logging.info("Підключення до бази даних успішне.")
+    except Exception as e:
+        logging.error(f"Помилка підключення до бази даних при старті: {e}")
+
+    # Set webhook
+    webhook_info = await bot.get_webhook_info()
+    if webhook_info.url != WEBHOOK_URL:
+        await bot.set_webhook(url=WEBHOOK_URL)
+        logging.info(f"Webhook встановлено на: {WEBHOOK_URL}")
+    else:
+        logging.info(f"Webhook вже встановлено на: {WEBHOOK_URL}")
+
+    # Register handlers
+    register_telegram_handlers(dp)
+    
+    # Start background task for auto notifications
+    asyncio.create_task(send_auto_notifications_task())
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    logging.warning('Завершення роботи...')
+    await bot.delete_webhook()
+    await dp.storage.close()
+    await bot.session.close()
+    logging.warning('Завершено.')
+
+# Telegram Bot Webhook Endpoint
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    telegram_update = types.Update(**await request.json())
+    await dp.feed_update(bot, telegram_update)
+    return {"ok": True}
+
