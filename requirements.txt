@@ -1,9 +1,9 @@
-aiogram
+aiogram==3.4.1
 fastapi
 uvicorn
 python-dotenv
 psycopg2-binary
-python-dotenv
-asyncpg # Додано для підтримки PostgreSQL
-aiohttp # Для асинхронних HTTP запитів
- croniter # Можливо для фонових задач, якщо не використовувати зовнішні планувальники
+aiohttp
+croniter 
+
+
