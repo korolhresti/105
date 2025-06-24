@@ -6,45 +6,14 @@ import aiohttp
 from datetime import datetime
 import json
 from aiogram import Dispatcher, Bot, types
-# ВИПРАВЛЕНО: Імпорти для Aiogram v3+
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher import FSMContext
 from aiogram.enums import ParseMode # Для коректного відображення Markdown V2
 
-
-# Функція для екранування тексту для MarkdownV2
-def escape_markdown_v2(text: str) -> str:
-    """
-    Екранує спеціальні символи MarkdownV2 у наданому тексті.
-    """
-    if not isinstance(text, (str, int, float)): # Дозволяємо також числа
-        text = str(text) # Перетворюємо на рядок, якщо це не рядок
-
-    # Список символів, які потребують екранування в MarkdownV2
-    # https://core.telegram.org/bots/api#markdownv2-style
-    # Важливо: зворотний слеш `\` сам по собі потребує екранування
-    special_chars = [
-        '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+',
-        '-', '=', '|', '{', '}', '.', '!'
-    ]
-    
-    escaped_text = text
-    for char in special_chars:
-        # Екрануємо символ, якщо він є в тексті
-        # Це проста реалізація, для ідеальної обробки потрібен складніший парсер,
-        # що враховує контекст (наприклад, не екранувати `.` в URL)
-        escaped_text = escaped_text.replace(char, '\\' + char)
-    
-    # Спеціальна обробка для символів, які можуть бути частиною URL, але також є спецсимволами MDV2
-    # Це спроба зробити URL більш "безпечними" без надмірного екранування
-    if 'http' in text or 'https' in text:
-        # Не екрануємо `/` у URL
-        escaped_text = escaped_text.replace('\\/', '/')
-        # Можна додати інші винятки, якщо це викликає проблеми з URL
-    
-    return escaped_text
-
+# API_URL буде передано з webapp.py через змінні оточення
+# BOT_USERNAME також має бути доступним через змінні оточення в webapp.py
+# MONOBANK_CARD_NUMBER також має бути доступним через змінні оточення в webapp.py
 
 # ==== STATES (Стани для FSM) ====
 class AddSourceStates(StatesGroup):
@@ -124,7 +93,7 @@ filters_keyboard = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
 
 ai_analysis_keyboard = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
     [KeyboardButton(text="🧠 AI Summary"), KeyboardButton(text="🔍 Фактчекінг")],
-    [KeyboardButton(text="💡 Рекомендації"), KeyboardButton(text="✍️ Переписати заголовок")],
+    [KeyboardButton(text="💡 Рекомендації"), KeyboardButton(text="✍️ Переписати заголовок")], # Кнопка "Переписати заголовок"
     [KeyboardButton(text="⬅️ Головне меню")]
 ])
 
@@ -136,6 +105,17 @@ extra_features_keyboard = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
 ])
 
 # == ХЕНДЛЕРИ ==
+
+# Функція для екранування тексту для MarkdownV2
+def escape_markdown_v2(text: str) -> str:
+    """Екранує спеціальні символи MarkdownV2."""
+    if not isinstance(text, str):
+        return str(text)
+    # Список символів, які потребують екранування в MarkdownV2
+    # https://core.telegram.org/bots/api#markdownv2-style
+    escape_chars = '_*[]()~`>#+-=|{}.!'
+    return ''.join(['\\' + char if char in escape_chars else char for char in text])
+
 
 async def start_command_handler(msg: types.Message):
     """
@@ -192,7 +172,7 @@ async def show_news_handler(msg: types.Message):
                     InlineKeyboardButton(text="🔖 Зберегти", callback_data=f"save_{news_item['id']}"),
                     InlineKeyboardButton(text="➡️ Пропустити", callback_data=f"skip_{news_item['id']}")
                 )
-                if news_item.get('link'):
+                if link:
                      keyboard.add(InlineKeyboardButton(text="🌐 Читати повністю", url=news_item['link']))
 
                 await msg.answer(
@@ -311,7 +291,7 @@ async def show_my_filters_handler(msg: types.Message):
                 filter_text = "*Ваші активні фільтри:*\n"
                 for k, v in filters.items():
                     if v:
-                        filter_text += f"\\- *{escape_markdown_v2(k.capitalize())}*: `{escape_markdown_v2(v)}`\n"
+                        filter_text += f"\- *{escape_markdown_v2(k.capitalize())}*: `{escape_markdown_v2(v)}`\n"
                 await msg.answer(filter_text, parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 await msg.answer("У вас немає активних фільтрів.")
@@ -504,12 +484,12 @@ async def premium_info_handler(msg: types.Message):
 
             if is_premium:
                 expires_date = datetime.fromisoformat(premium_expires_at).strftime("%d.%m.%Y %H:%M") if premium_expires_at else "невідомо"
-                await msg.answer(f"🎉 У вас активна *Преміум\\-підписка* до `{escape_markdown_v2(expires_date)}`\\.", parse_mode=ParseMode.MARKDOWN_V2)
+                await msg.answer(f"🎉 У вас активна *Преміум\-підписка* до `{escape_markdown_v2(expires_date)}`\\.", parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 keyboard = InlineKeyboardMarkup().add(
                     InlineKeyboardButton(text="Купити Преміум (100 UAH/міс)", callback_data="buy_premium")
                 )
-                await msg.answer("✨ Отримайте *Преміум\\-підписку* для доступу до розширених функцій!\n\n"
+                await msg.answer("✨ Отримайте *Преміум\-підписку* для доступу до розширених функцій!\n\n"
                                  "**Переваги:**\n"
                                  "\\- Розширений AI\\-аналіз\n"
                                  "\\- Персоналізовані рекомендації\n"
@@ -525,7 +505,7 @@ async def handle_buy_premium_callback(callback_query: types.CallbackQuery):
     """Обробляє натискання кнопки 'Купити Преміум'."""
     MONOBANK_CARD_NUMBER = os.getenv("MONOBANK_CARD_NUMBER")
     await callback_query.bot.answer_callback_query(callback_query.id, show_alert=True, text="Для оплати перейдіть до Monobank або скористайтеся іншим банківським додатком та перекажіть 100 UAH на вказаний номер картки. Після оплати ваш преміум буде активовано автоматично протягом кількох хвилин.")
-    await callback_query.message.answer(f"Для активації *Преміум\\-підписки* перекажіть `100 UAH` на картку Monobank: `{escape_markdown_v2(MONOBANK_CARD_NUMBER)}`\\.\n\n"
+    await callback_query.message.answer(f"Для активації *Преміум\-підписки* перекажіть `100 UAH` на картку Monobank: `{escape_markdown_v2(MONOBANK_CARD_NUMBER)}`\\.\n\n"
                                         "Активація відбудеться автоматично після підтвердження оплати\\.", parse_mode=ParseMode.MARKDOWN_V2)
 
 async def email_subscription_menu_handler(msg: types.Message, state: FSMContext):
@@ -544,19 +524,19 @@ async def email_subscription_menu_handler(msg: types.Message, state: FSMContext)
                     InlineKeyboardButton(text="Змінити Email", callback_data="change_email"),
                     InlineKeyboardButton(text="Відписатись від Email", callback_data="unsubscribe_email")
                 )
-                await msg.answer(f"Ваша поточна Email\\-адреса для розсилки: `{escape_markdown_v2(user_email)}`\\.", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
+                await msg.answer(f"Ваша поточна Email\-адреса для розсилки: `{escape_markdown_v2(user_email)}`\\.", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 keyboard = InlineKeyboardMarkup().add(
                     InlineKeyboardButton(text="Додати Email", callback_data="add_email")
                 )
-                await msg.answer("У вас ще не налаштована Email\\-розсилка\\. Додайте вашу Email\\-адресу:", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
+                await msg.answer("У вас ще не налаштована Email\-розсилка\\. Додайте вашу Email\-адресу:", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося завантажити профіль користувача.")
 
 async def request_email_input_callback(callback_query: types.CallbackQuery, state: FSMContext):
     """Запитує Email адресу у користувача."""
     await callback_query.bot.answer_callback_query(callback_query.id)
-    await callback_query.message.answer("Будь ласка, введіть вашу Email\\-адресу:", parse_mode=ParseMode.MARKDOWN_V2)
+    await callback_query.message.answer("Будь ласка, введіть вашу Email\-адресу:", parse_mode=ParseMode.MARKDOWN_V2)
     await ProfileSettingsStates.waiting_for_email.set()
 
 async def process_email_input_handler(msg: types.Message, state: FSMContext):
@@ -567,13 +547,13 @@ async def process_email_input_handler(msg: types.Message, state: FSMContext):
     API_URL = os.getenv("WEBAPP_URL")
 
     if "@" not in email or "." not in email:
-        await msg.answer("Будь ласка, введіть коректну Email\\-адресу\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        await msg.answer("Будь ласка, введіть коректну Email\-адресу\\.", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     async with aiohttp.ClientSession() as session:
         resp = await session.post(f"{API_URL}/users/register", json={"user_id": user_id, "email": email})
         if resp.status == 200:
-            await msg.answer(f"✅ Вашу Email\\-адресу `{escape_markdown_v2(email)}` успішно збережено для розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await msg.answer(f"✅ Вашу Email\-адресу `{escape_markdown_v2(email)}` успішно збережено для розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося зберегти Email\\. Можливо, ця адреса вже використовується\\.", parse_mode=ParseMode.MARKDOWN_V2)
     await state.finish()
@@ -587,9 +567,9 @@ async def unsubscribe_email_callback(callback_query: types.CallbackQuery):
     async with aiohttp.ClientSession() as session:
         resp = await session.post(f"{API_URL}/users/register", json={"user_id": user_id, "email": None})
         if resp.status == 200:
-            await callback_query.message.answer("✅ Ви успішно відписалися від Email\\-розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await callback_query.message.answer("✅ Ви успішно відписалися від Email\-розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
-            await callback_query.message.answer("❌ Не вдалося відписатися від Email\\-розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await callback_query.message.answer("❌ Не вдалося відписатися від Email\-розсилки\\.", parse_mode=ParseMode.MARKDOWN_V2)
 
 async def toggle_auto_notifications_handler(msg: types.Message):
     """Перемикає автоматичні сповіщення про нові новини."""
@@ -608,7 +588,7 @@ async def toggle_auto_notifications_handler(msg: types.Message):
                 status_text = "увімкнено" if new_auto_notifications else "вимкнено"
                 await msg.answer(f"✅ Автоматичні сповіщення про нові новини {status_text}\\.", parse_mode=ParseMode.MARKDOWN_V2)
             else:
-                await msg.answer("❌ Не вдалося змінити налаштування авто\\-сповіщень\\.", parse_mode=ParseMode.MARKDOWN_V2)
+                await msg.answer("❌ Не вдалося змінити налаштування авто-сповіщень\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             await msg.answer("❌ Не вдалося завантажити профіль користувача\\.", parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -892,7 +872,7 @@ async def recommend_handler(msg: types.Message):
                 recommendations_text = "*📌 Вам можуть сподобатись ці новини:*\n\n"
                 for item in recommended:
                     title_escaped = escape_markdown_v2(item['title'])
-                    recommendations_text += f"\\- `{escape_markdown_v2(str(item['id']))}`: {title_escaped}\n"
+                    recommendations_text += f"\- `{escape_markdown_v2(str(item['id']))}`: {title_escaped}\n"
                 await msg.answer(recommendations_text, parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 await msg.answer("Наразі немає рекомендацій. Продовжуйте читати, щоб AI зміг краще вас зрозуміти!")
@@ -930,7 +910,7 @@ async def verify_command_handler(msg: types.Message):
 async def rewrite_headline_start_handler(msg: types.Message, state: FSMContext):
     """Запитує заголовок для переписування."""
     await msg.answer("✍️ Будь ласка, надішліть заголовок, який ви хочете переписати:")
-    await state.set_state('waiting_for_headline_to_rewrite')
+    await state.set_state('waiting_for_headline_to_rewrite') # Додаємо стан
 
 async def process_headline_rewrite_handler(msg: types.Message, state: FSMContext):
     """Переписує заголовок за допомогою AI."""
@@ -992,7 +972,7 @@ async def process_news_source_name_handler(msg: types.Message, state: FSMContext
 async def process_news_link_handler(msg: types.Message, state: FSMContext):
     link = msg.text.strip()
     await state.update_data(link=link if link != '-' else None)
-    await msg.answer("Надішліть *фото/відео* або інший медіа\\-файл для новини, або введіть `-` якщо немає:", parse_mode=ParseMode.MARKDOWN_V2)
+    await msg.answer("Надішліть *фото/відео* або інший медіа\-файл для новини, або введіть `-` якщо немає:", parse_mode=ParseMode.MARKDOWN_V2)
     await AddNewsStates.waiting_for_media.set()
 
 async def process_news_media_handler(msg: types.Message, state: FSMContext):
@@ -1108,7 +1088,7 @@ async def show_bookmarks_handler(msg: types.Message):
                 bookmarks_text = "*🔖 Ваші збережені новини:*\n\n"
                 for item in bookmarks:
                     title_escaped = escape_markdown_v2(item['title'])
-                    bookmarks_text += f"\\- `{escape_markdown_v2(str(item['id']))}`: {title_escaped}\n"
+                    bookmarks_text += f"\- `{escape_markdown_v2(str(item['id']))}`: {title_escaped}\n"
                 await msg.answer(bookmarks_text, parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 await msg.answer("У вас немає збережених новин у закладках\\.", parse_mode=ParseMode.MARKDOWN_V2)
@@ -1175,7 +1155,7 @@ async def process_view_comments_news_id_handler(msg: types.Message, state: FSMCo
                 for comment in comments:
                     comment_content = escape_markdown_v2(comment['content'])
                     user_telegram_id = escape_markdown_v2(str(comment['user_telegram_id']) if comment['user_telegram_id'] else 'Невідомий')
-                    comments_text += f"\\_\\[Користувач: {user_telegram_id}\\]\\_ \n`{comment_content}`\n\n"
+                    comments_text += f"\\_\\[Користувач: {user_telegram_id}\]\_ \n`{comment_content}`\n\n"
                 await msg.answer(comments_text, parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 await msg.answer("До цієї новини ще немає коментарів або вони очікують модерації\\.", parse_mode=ParseMode.MARKDOWN_V2)
@@ -1195,7 +1175,7 @@ async def show_trending_news_handler(msg: types.Message):
                 trend_text = "*🔥 Трендові новини:*\n\n"
                 for item in trending_news:
                     title_escaped = escape_markdown_v2(item['title'])
-                    trend_text += f"\\- `{escape_markdown_v2(str(item['id']))}`: {title_escaped}\n"
+                    trend_text += f"\- `{escape_markdown_v2(str(item['id']))}`: {title_escaped}\n"
                 await msg.answer(trend_text, parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 await msg.answer("Наразі немає трендових новин\\.", parse_mode=ParseMode.MARKDOWN_V2)
@@ -1302,16 +1282,12 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query_handler(lambda c: c.data == "view_comments")(start_view_comments_callback)
 
     # FSM handlers
-    # В Aiogram v3+ FSMContext.set_state() та FSMContext.update_data() очікують state як перший аргумент
-    # Якщо ви використовуєте decorator для message_handler з state=StateGroup.state_name, то state об'єкт автоматично передається
-    # Для `await state.set_state('waiting_for_headline_to_rewrite')` це має бути `await state.set_state(MyStates.waiting_for_headline_to_rewrite)`
-    # Проте, якщо це тимчасовий стан, і не визначений в StatesGroup, то `set_state('string')` теж працює
     dp.message_handler(state=FilterStates.waiting_for_filter_tag)(process_filter_value_handler)
     dp.message_handler(state=CustomFeedStates.waiting_for_feed_name)(process_custom_feed_name_handler)
     dp.message_handler(state=CustomFeedStates.waiting_for_feed_filters_tags)(process_feed_filter_value_handler)
     dp.message_handler(state=ProfileSettingsStates.waiting_for_email)(process_email_input_handler)
     dp.message_handler(state=ProfileSettingsStates.waiting_for_language_change)(process_interface_lang_change_handler)
-    dp.message_handler(state='waiting_for_headline_to_rewrite')(process_headline_rewrite_handler)
+    dp.message_handler(state='waiting_for_headline_to_rewrite')(process_headline_rewrite_handler) # Стан для переписування заголовка
     dp.message_handler(state=AddNewsStates.waiting_for_title)(process_news_title_handler)
     dp.message_handler(state=AddNewsStates.waiting_for_content)(process_news_content_handler)
     dp.message_handler(state=AddNewsStates.waiting_for_lang)(process_news_lang_handler)
@@ -1332,3 +1308,15 @@ def register_handlers(dp: Dispatcher):
     # Обробник невідомих повідомлень має бути останнім
     dp.message_handler()(unknown_message_handler)
 
+
+# Приклад використання (для локального тестування, не для продакшну з webhook)
+# if __name__ == '__main__':
+#     # Для запуску polling локально, якщо webapp.py не використовується
+#     from aiogram.utils import executor
+#     # Переконайтеся, що BOT_TOKEN та WEBAPP_URL завантажені
+#     # load_dotenv() # Якщо ви запускаєте цей файл окремо
+#     # bot_instance = Bot(token=os.getenv("BOT_TOKEN"), parse_mode=ParseMode.MARKDOWN_V2)
+#     # dp_instance = Dispatcher(bot_instance, storage=MemoryStorage())
+#     # register_handlers(dp_instance)
+#     # executor.start_polling(dp_instance, skip_updates=True)
+#     pass # Цей блок повинен бути порожнім, якщо ви використовуєте Webhook
